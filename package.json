@@ -1,0 +1,13 @@
+{
+  "name": "zotero-ollama-local-ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local Ollama tags and child notes for Zotero 10",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test tests/core.test.cjs tests/adapter.test.cjs tests/lifecycle.test.cjs",
+    "test:ui": "node --test tests/ui.test.cjs",
+    "build": "python3 scripts/build.py"
+  },
+  "engines": { "node": ">=18" }
+}

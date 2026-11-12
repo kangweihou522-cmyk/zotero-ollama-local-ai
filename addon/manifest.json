@@ -1,0 +1,15 @@
+{
+  "manifest_version": 2,
+  "name": "Ollama Local AI · 本地标签与简记",
+  "version": "0.1.0",
+  "description": "使用本地 Ollama 为文献生成标签与子笔记，预览并编辑后保存。",
+  "author": "Ollama Local AI contributors",
+  "applications": {
+    "zotero": {
+      "id": "ollama-local-ai@local.tools",
+      "strict_min_version": "10.0",
+      "strict_max_version": "10.0.*"
+    }
+  },
+  "icons": { "48": "content/icon.svg", "96": "content/icon.svg" }
+}
