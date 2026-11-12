@@ -1,0 +1,2 @@
+8927d67d1c61178630ce60011f0fb3c5f9ab232d5ea18300100be21f49be7290  ollama-local-ai-0.1.0-source.zip
+cb5da438a68cbea65df26d0f73ee3d2ec1f059e91e435cddfd6cd0f2a78961d0  ollama-local-ai-0.1.0.xpi

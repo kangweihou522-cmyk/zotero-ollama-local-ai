@@ -4,7 +4,7 @@
 
 当前版本：`0.1.0`。兼容目标是 **Zotero 10.0.8 桌面版**；安装清单允许 `10.0.x`。本项目尚未在真实 Zotero 10.0.8 和真实 Ollama 模型中完成联合实测，验证范围见 [docs/VALIDATION.md](docs/VALIDATION.md)。
 
-下载：[v0.1.0 预览版与安装包](https://github.com/kangweihou522-cmyk/zotero-ollama-local-ai/releases/tag/v0.1.0)。在该页面的 Assets 中下载 `.xpi`；源码包和中文说明一并提供。
+下载：[XPI 安装包](https://github.com/kangweihou522-cmyk/zotero-ollama-local-ai/raw/refs/heads/main/downloads/ollama-local-ai-0.1.0.xpi) · [完整源码包](https://github.com/kangweihou522-cmyk/zotero-ollama-local-ai/raw/refs/heads/main/downloads/ollama-local-ai-0.1.0-source.zip) · [v0.1.0 预览版说明](https://github.com/kangweihou522-cmyk/zotero-ollama-local-ai/releases/tag/v0.1.0)。
 
 ![使用模拟数据的界面预览](docs/preview.png)
 
