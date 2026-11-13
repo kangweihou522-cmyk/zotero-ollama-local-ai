@@ -23,9 +23,13 @@
 
 ## 原生宿主与实际模型
 
-开发云环境没有预装 Zotero，官方二进制下载地址曾返回代理 HTTP 403。原生测试流程需要使用独立临时 profile 安装实际构建的 XPI，检查真实窗口、原生 HTTP、条目与笔记写入，并记录结果。只有流程成功的执行记录才是宿主安装验证的证据，新增测试脚本本身不代表已通过。
+**真实 Zotero 10.0.8 原生测试已通过。** [GitHub Actions 执行记录](https://github.com/kangweihou522-cmyk/zotero-ollama-local-ai/actions/runs/43392236807)的结果为 `success: true`，宿主版本为 `10.0.8`，安装包版本为 `0.2.0`。
 
-原生测试即便使用回环地址的模拟 Ollama 服务通过，也只验证请求和保存流程。实际模型的 JSON 遵循能力、生成速度、理解和事实准确性仍需在用户本机验证。
+该流程在 Linux 上使用官方 Zotero 二进制和独立临时 profile，通过 `AddonManager.getInstallForFile()` 解析并安装实际 XPI，随后确认：插件启动、两个菜单注册、设置注册、真实 XUL 窗口与脚本加载、原生 HTTP 请求、真实数据库中的标签和 Extra 简记写入、独立的简记与概览子笔记，以及拒绝未经选择的覆盖且不产生部分写入。
+
+开发云环境未预装 Zotero，官方二进制下载曾受代理 HTTP 403 限制，因此原生验证在 GitHub 托管测试环境完成。临时文献和回环模型服务均为合成测试数据，不使用用户文献。Windows、macOS 和用户当前全部插件组合尚未联合实测。
+
+原生测试使用回环地址的模拟 Ollama 服务，只验证请求和保存流程。实际模型的 JSON 遵循能力、生成速度、理解和事实准确性仍需在用户本机验证。
 
 Style 互通依据作者公开的 Extra `remark:` 约定，不替换 Style 的原 AI 菜单，也未对用户当前全部插件组合做联合测试。[Style 作者说明](https://github.com/MuiseDestiny/zotero-style/issues/1308)
 

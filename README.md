@@ -4,6 +4,8 @@
 
 当前为 **0.2.0 预览版**，兼容目标是 **Zotero 10.0.8 桌面版**，清单允许 `10.0.x`。其他主版本尚未声明兼容；验证范围见 [验证说明](docs/VALIDATION.md)。
 
+验证结果：53 项自动回归与界面测试通过；已在 Linux 上的真实 Zotero 10.0.8 完成 XPI 安装、窗口、请求与数据库写入验证。[原生测试记录](https://github.com/kangweihou522-cmyk/zotero-ollama-local-ai/actions/runs/43392236807)。真实模型的生成质量仍需在本机检查。
+
 **请使用 0.2.0 替代 0.1.0。** 旧版遗漏 Zotero 必需的 `update_url` 清单字段，会导致安装失败。新版补齐更新元数据，并增加打包回归检查。
 
 下载：[XPI 安装包](https://github.com/kangweihou522-cmyk/zotero-ollama-local-ai/raw/refs/heads/main/downloads/ollama-local-ai-0.2.0.xpi) · [完整源码包](https://github.com/kangweihou522-cmyk/zotero-ollama-local-ai/raw/refs/heads/main/downloads/ollama-local-ai-0.2.0-source.zip) · [v0.2.0 预览版说明](https://github.com/kangweihou522-cmyk/zotero-ollama-local-ai/releases/tag/v0.2.0)。
