@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
         xmlns:h="http://www.w3.org/1999/xhtml" id="ollama-local-ai-window"
-        title="Ollama Local AI · 本地标签与简记" width="1040" height="800" persist="width height">
+        title="Ollama Local AI · 标签、简记与概览" width="1040" height="860" persist="width height">
   <h:link rel="stylesheet" href="dialog.css"/>
   <h:main id="app">
     <h:header class="header">
@@ -9,7 +9,7 @@
       <h:span class="local-badge">本地推理 · 预览后保存</h:span>
     </h:header>
     <h:nav class="tabs" aria-label="工作区">
-      <h:button id="tab-generate" class="tab active" type="button">标签与简记</h:button>
+      <h:button id="tab-generate" class="tab active" type="button">文献整理</h:button>
       <h:button id="tab-settings" class="tab" type="button">模型与设置</h:button>
       <h:span id="version" class="version"/>
     </h:nav>
@@ -17,7 +17,7 @@
     <h:section id="panel-generate">
       <h:div class="toolbar">
         <h:label for="mode">生成内容</h:label>
-        <h:select id="mode"><h:option value="both">标签 + 简记</h:option><h:option value="tags">仅标签</h:option><h:option value="note">仅简记</h:option></h:select>
+        <h:select id="mode"><h:option value="all">标签 + 简记 + 概览</h:option><h:option value="tags">仅标签</h:option><h:option value="note">仅简记</h:option><h:option value="overview">仅概览</h:option><h:option value="both">标签 + 简记</h:option></h:select>
         <h:span id="model-summary" class="muted grow"/>
         <h:button id="generate" class="primary" type="button">开始生成</h:button>
         <h:button id="cancel" type="button" disabled="disabled">停止</h:button>
@@ -35,9 +35,26 @@
             <h:label for="result-tags" class="field-label">建议标签 <h:span class="muted">每行一个，可直接修改</h:span></h:label>
             <h:textarea id="result-tags" rows="4" placeholder="生成的标签会显示在这里" disabled="disabled"/>
           </h:div>
-          <h:div id="note-area" class="grow">
-            <h:label for="result-note" class="field-label">AI 简记 <h:span class="muted">保存为该文献的新子笔记</h:span></h:label>
-            <h:textarea id="result-note" rows="11" placeholder="研究问题、方法、主要发现与局限；仅依据提供的材料" disabled="disabled"/>
+          <h:div id="note-area">
+            <h:label for="result-note" class="field-label">AI 简记 <h:span class="muted">一句话提示，可修改为你自己的表述</h:span></h:label>
+            <h:textarea id="result-note" rows="2" placeholder="建议 15～40 字的一句话简记" disabled="disabled"/>
+            <h:label for="brief-target" class="field-label">简记保存位置</h:label>
+            <h:select id="brief-target"><h:option value="note">新建子笔记</h:option><h:option value="style-and-note">Style 简记栏 + 新建子笔记</h:option></h:select>
+            <h:div id="style-preview" class="style-preview" hidden="hidden">
+              <h:p id="existing-style-remark"/>
+              <h:label id="style-overwrite-label" class="check" hidden="hidden"><h:input id="allow-style-overwrite" type="checkbox"/>允许更新本篇已有的 Style 简记</h:label>
+            </h:div>
+          </h:div>
+          <h:div id="overview-area" hidden="hidden">
+            <h:label class="field-label">AI 概览 <h:span class="muted">单篇文献的结构化阅读概览，另存为子笔记</h:span></h:label>
+            <h:div class="overview-grid">
+              <h:div><h:label for="overview-background" class="field-label">研究背景</h:label><h:textarea id="overview-background" rows="3" disabled="disabled"/></h:div>
+              <h:div><h:label for="overview-question" class="field-label">研究问题</h:label><h:textarea id="overview-question" rows="3" disabled="disabled"/></h:div>
+              <h:div><h:label for="overview-methods" class="field-label">研究方法</h:label><h:textarea id="overview-methods" rows="3" disabled="disabled"/></h:div>
+              <h:div><h:label for="overview-findings" class="field-label">主要发现</h:label><h:textarea id="overview-findings" rows="3" disabled="disabled"/></h:div>
+              <h:div><h:label for="overview-limitations" class="field-label">局限与证据缺口</h:label><h:textarea id="overview-limitations" rows="3" disabled="disabled"/></h:div>
+              <h:div><h:label for="overview-relevance" class="field-label">阅读价值与应用</h:label><h:textarea id="overview-relevance" rows="3" disabled="disabled"/></h:div>
+            </h:div>
           </h:div>
           <h:div class="save-row">
             <h:span id="item-status" class="muted grow"/>
@@ -72,7 +89,7 @@
             <h:div><h:label for="context-tokens" class="field-label">模型上下文（tokens）</h:label><h:select id="context-tokens"><h:option value="4096">4096</h:option><h:option value="8192">8192</h:option><h:option value="16384">16384</h:option><h:option value="32768">32768</h:option><h:option value="65536">65536</h:option><h:option value="131072">131072</h:option></h:select></h:div>
           </h:div>
           <h:label for="instructions" class="field-label">补充要求（可选）</h:label>
-          <h:textarea id="instructions" rows="5" placeholder="例如：优先使用机器学习领域常用标签；简记控制在 300 字左右。"/>
+          <h:textarea id="instructions" rows="5" placeholder="例如：标签优先标明研究对象和方法；概览重点说明实验设计与证据局限。"/>
           <h:p class="hint">输入会按字符上限和上下文预算截断。上下文越大，内存占用越高；默认 16384 tokens，低内存可选 4096 或 8192。冷启动较慢时可延长超时。</h:p>
         </h:section>
       </h:div>

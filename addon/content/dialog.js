@@ -8,7 +8,7 @@
     return;
   }
   const { core, adapter } = bridge;
-  const entries = bridge.items.map(item => ({ ...item, state: "pending", context: null, result: null, mode: bridge.mode, error: "" }));
+  const entries = bridge.items.map(item => ({ ...item, state: "pending", context: null, result: null, mode: bridge.mode, error: "", allowStyleOverwrite: false }));
   let selected = entries.length ? 0 : -1;
   let busy = false;
   let controller = null;
@@ -36,6 +36,7 @@
       timeoutSeconds: Number($("timeout").value),
       contextTokens: Number($("context-tokens").value),
       includeFulltext: $("include-fulltext").checked,
+      briefTarget: $("brief-target").value,
       instructions: $("instructions").value
     });
   }
@@ -47,6 +48,7 @@
     $("timeout").value = settings.timeoutSeconds;
     $("context-tokens").value = String(settings.contextTokens || 16384);
     $("include-fulltext").checked = settings.includeFulltext;
+    $("brief-target").value = settings.briefTarget || "note";
     $("instructions").value = settings.instructions;
     if (settings.model) {
       const option = document.createElementNS("http://www.w3.org/1999/xhtml", "option");
@@ -62,7 +64,7 @@
   }
   function setBusy(value) {
     busy = value;
-    for (const id of ["generate", "mode", "items", "save-settings", "refresh-models", "endpoint", "model", "language", "max-tags", "max-input", "timeout", "context-tokens", "include-fulltext", "instructions"]) {
+    for (const id of ["generate", "mode", "items", "save-settings", "refresh-models", "endpoint", "model", "language", "max-tags", "max-input", "timeout", "context-tokens", "include-fulltext", "instructions", "brief-target"]) {
       $(id).disabled = value || (id === "generate" && !entries.length);
     }
     $("cancel").disabled = !value;
@@ -86,6 +88,10 @@
     if (!entry || entry.state !== "ready") return;
     entry.result.tags = $("result-tags").value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     entry.result.note = $("result-note").value;
+    entry.allowStyleOverwrite = $("allow-style-overwrite").checked;
+    if (core.modeIncludes(entry.mode, "overview")) {
+      entry.result.overview = Object.fromEntries(core.OVERVIEW_FIELDS.map(({ key }) => [key, $("overview-" + key).value]));
+    }
   }
   function sourceText(entry) {
     if (!entry.context) return "生成前将读取本地元数据和可用的 PDF 索引。";
@@ -98,15 +104,27 @@
   function renderCurrent() {
     const entry = entries[selected];
     const mode = entry?.result ? entry.mode : $("mode").value;
-    $("tags-area").hidden = mode === "note";
-    $("note-area").hidden = mode === "tags";
+    $("tags-area").hidden = !core.modeIncludes(mode, "tags");
+    $("note-area").hidden = !core.modeIncludes(mode, "note");
+    $("overview-area").hidden = !core.modeIncludes(mode, "overview");
     $("item-title").textContent = entry?.title || "请先在文献库选中文献";
     $("source-info").textContent = entry ? sourceText(entry) : "关闭此窗口，在文献库选中一篇或多篇文献后重新打开。";
     $("result-tags").value = entry?.result?.tags.join("\n") || "";
     $("result-note").value = entry?.result?.note || "";
+    for (const { key } of core.OVERVIEW_FIELDS) $("overview-" + key).value = entry?.result?.overview?.[key] || "";
     const editable = entry?.state === "ready" && !busy;
     $("result-tags").disabled = !editable;
     $("result-note").disabled = !editable;
+    for (const { key } of core.OVERVIEW_FIELDS) $("overview-" + key).disabled = !editable;
+    const styleTarget = $("brief-target").value === "style-and-note";
+    $("style-preview").hidden = !styleTarget;
+    $("existing-style-remark").textContent = entry?.context?.styleRemarkAmbiguous
+      ? "该条目的 Extra 中有多条 remark，需先整理后才能写入 Style 简记栏。"
+      : entry?.context?.styleRemark ? "已有 Style 简记：" + entry.context.styleRemark
+      : "保存时将新增 Extra 的 remark 行；其他字段保留。";
+    $("style-overwrite-label").hidden = !entry?.context?.styleRemark;
+    $("allow-style-overwrite").checked = Boolean(entry?.allowStyleOverwrite);
+    $("allow-style-overwrite").disabled = !editable;
     $("save-current").disabled = !editable;
     $("save-all").disabled = busy || !entries.some(item => item.state === "ready");
     const labels = { pending: "待生成", generating: "正在生成…", ready: "待保存 · 可编辑", saved: "已保存到 Zotero", error: "生成失败 · 可重试" };
@@ -151,7 +169,7 @@
       if (!settings.model) throw new Error("请检测连接并选择一个已安装模型。");
       adapter.saveSettings(settings);
       modelSummary(settings);
-      notice("设置已保存。回到「标签与简记」即可开始生成。");
+      notice("设置已保存。回到「文献整理」即可开始生成。");
     } catch (error) { notice(error.message, "error"); }
   }
   async function generate() {
@@ -179,6 +197,7 @@
         entry.mode = $("mode").value;
         entry.state = "generating";
         entry.error = "";
+        entry.allowStyleOverwrite = false;
         renderList(); renderCurrent();
         notice(`正在生成 ${completed + 1} / ${pending.length}：${entry.title}\n首次加载模型可能需要较长时间。`);
         try {
@@ -214,9 +233,10 @@
       try {
         notice(`正在保存 ${saved + 1} / ${targets.length}：${entry.title}`);
         // Validate edited fields before starting the database transaction.
-        const validated = core.parseGeneration(JSON.stringify({tags:entry.result.tags,note:entry.result.note}), entry.mode, entry.settings);
+        const validated = core.parseGeneration(JSON.stringify({tags:entry.result.tags,note:entry.result.note,overview:entry.result.overview}), entry.mode, entry.settings);
         const result = { ...entry.result, ...validated };
-        await adapter.saveResult(entry.id, result, entry.context, entry.settings, entry.mode);
+        const saveSettings = { ...entry.settings, briefTarget: $("brief-target").value };
+        await adapter.saveResult(entry.id, result, entry.context, saveSettings, entry.mode, { allowStyleOverwrite: entry.allowStyleOverwrite });
         entry.result = result;
         entry.state = "saved";
         entry.error = "";
@@ -228,12 +248,12 @@
       renderList(); renderCurrent();
     }
     setBusy(false);
-    notice(`已保存 ${saved} 篇。${errors.length ? "\n" + errors.join("\n") : "标签与子笔记已写入 Zotero。"}`, errors.length ? "error" : "");
+    notice(`已保存 ${saved} 篇。${errors.length ? "\n" + errors.join("\n") : "所选结果已写入 Zotero。"}`, errors.length ? "error" : "");
   }
 
-  $("version").textContent = "v" + bridge.version + " · Zotero 10";
+  $("version").textContent = "v" + bridge.version + " · Zotero " + (bridge.hostVersion || "10");
   fillSettings(adapter.loadSettings());
-  $("mode").value = bridge.mode || "both";
+  $("mode").value = bridge.mode || "all";
   renderList(); renderCurrent(); setBusy(false);
   page(Boolean(bridge.settingsPage));
   notice(entries.length ? `已选中 ${entries.length} 篇文献。生成完成后可预览、编辑，再保存到文献库。` : "请先配置本地模型。生成时，请从文献库选中文献后重新打开。 ");
@@ -241,6 +261,11 @@
   $("tab-generate").addEventListener("click", () => page(false));
   $("items").addEventListener("change", () => { persistEdits(); selected = Number($("items").value); renderCurrent(); });
   $("mode").addEventListener("change", () => { persistEdits(); renderCurrent(); });
+  $("brief-target").addEventListener("change", () => {
+    persistEdits();
+    try { adapter.saveSettings(formSettings()); renderCurrent(); }
+    catch (error) { notice(error.message, "error"); }
+  });
   $("refresh-models").addEventListener("click", refreshModels);
   $("save-settings").addEventListener("click", saveSettings);
   $("generate").addEventListener("click", generate);

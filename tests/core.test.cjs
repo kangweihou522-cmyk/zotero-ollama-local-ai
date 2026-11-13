@@ -21,6 +21,9 @@ test('settings normalize bounds and preserve explicit preferences', () => {
   assert.equal(settings.model, 'qwen3:8b');
   assert.equal(settings.language, 'en');
   assert.equal(settings.contextTokens, 16384);
+  assert.equal(settings.briefTarget, 'note');
+  assert.equal(core.normalizeSettings({briefTarget:'style-and-note'}).briefTarget,'style-and-note');
+  assert.equal(core.normalizeSettings({briefTarget:'overwrite-extra'}).briefTarget,'note');
   assert.equal(core.normalizeSettings({contextTokens:1024}).contextTokens,4096);
   assert.equal(core.normalizeSettings({contextTokens:999999}).contextTokens,131072);
 });
@@ -48,9 +51,9 @@ test('fulltext is omitted when disabled and metadata-only evidence is explicit',
 
 test('model results accept fenced JSON and deduplicate tags', () => {
   const result = core.parseGeneration('<think>ignored private reasoning</think>\n```json\n{"tags":[" Deep learning ","deep LEARNING","Graph","Other"],"note":"结果。"}\n```','both',{maxTags:2});
-  assert.deepEqual(result, {tags:['Deep learning','Graph'],note:'结果。'});
-  assert.deepEqual(core.parseGeneration('{"note":"Note"}', 'note'), {tags:[],note:'Note'});
-  assert.deepEqual(core.parseGeneration('{"tags":["Tag"]}', 'tags'), {tags:['Tag'],note:''});
+  assert.deepEqual(result, {tags:['Deep learning','Graph'],note:'结果。',overview:null});
+  assert.deepEqual(core.parseGeneration('{"note":"Note"}', 'note'), {tags:[],note:'Note',overview:null});
+  assert.deepEqual(core.parseGeneration('{"tags":["Tag"]}', 'tags'), {tags:['Tag'],note:'',overview:null});
 });
 
 test('invalid or dangerous model results never become successful empty writes', () => {
@@ -180,4 +183,92 @@ test('small advertised contexts remain usable and oversized writing instructions
   await core.generate(transport,{title:'P',existingTags:Array.from({length:50},(_,index)=>String(index))},'note',{model:'local'});
   assert.ok(Buffer.byteLength(sent.messages.map(message=>message.content).join('\n'))+sent.options.num_predict+64<=2048);
   await assert.rejects(()=>core.generate(transport,{title:'Paper'},'note',{model:'local',instructions:'额外要求'.repeat(1000)}),/上下文不足/);
+});
+
+const overview = () => ({
+  background:'摘要关注本地模型辅助文献管理。',
+  question:'本地模型能否为文献生成可用标签？',
+  methods:'材料未提供。',
+  findings:'摘要说明可生成候选标签，未提供定量验证结果。',
+  limitations:'仅有摘要，实验、样本量和误差数据均未提供。',
+  relevance:'可作为本地文献整理工具的设计参考，效果仍需验证。',
+});
+
+test('modes select exactly the requested outputs and keep the legacy both meaning', () => {
+  const expected = {
+    tags:['tags'],note:['note'],both:['tags','note'],overview:['overview'],all:['tags','note','overview'],
+  };
+  for(const [mode, parts] of Object.entries(expected)) {
+    assert.deepEqual(['tags','note','overview'].filter(part=>core.modeIncludes(mode,part)),parts);
+    const prompt=core.buildMessages({title:'Title only'},mode)[0].content;
+    const schema=JSON.parse(prompt.match(/Required schema: (.+)\. Include only the requested fields\./)[1]);
+    assert.deepEqual(Object.keys(schema),parts);
+    if(parts.includes('note'))assert.match(prompt,/15–40 Chinese characters/);
+    if(parts.includes('overview')) {
+      assert.deepEqual(Object.keys(schema.overview),core.OVERVIEW_FIELDS.map(field=>field.key));
+      assert.match(prompt,/材料未提供/);
+      assert.match(prompt,/single paper/);
+    }
+  }
+  assert.throws(()=>core.modeIncludes('collection','overview'),/未知生成模式/);
+  assert.throws(()=>core.modeIncludes('all','extra'),/未知生成内容/);
+});
+
+test('overview and all parse into explicit distinct outputs and ignore unrequested extras', () => {
+  const value=overview();
+  assert.deepEqual(core.parseGeneration(JSON.stringify({overview:value,tags:['unrequested'],note:'unrequested'}),'overview'),{tags:[],note:'',overview:value});
+  assert.deepEqual(core.parseGeneration(JSON.stringify({overview:value,tags:['AI','ai'],note:' Short brief. '}),'all'),{tags:['AI'],note:'Short brief.',overview:value});
+  assert.deepEqual(core.parseGeneration(JSON.stringify({overview:value,note:'brief'}),'note'),{tags:[],note:'brief',overview:null});
+  assert.deepEqual(core.parseGeneration(JSON.stringify({overview:value,tags:['topic']}),'tags'),{tags:['topic'],note:'',overview:null});
+});
+
+test('incomplete, empty, non-text and active-markup overviews cannot become saved content', () => {
+  for(const malformed of [null,[],{},'A summary',{...overview(),methods:''},{...overview(),question:42},{...overview(),findings:'<img src=x onerror=alert(1)>'},{...overview(),background:'x'.repeat(20001)}]) {
+    assert.throws(()=>core.parseGeneration(JSON.stringify({overview:malformed}),'overview'));
+  }
+  for(const field of core.OVERVIEW_FIELDS) {
+    const missing=overview();delete missing[field.key];
+    assert.throws(()=>core.parseGeneration(JSON.stringify({overview:missing}),'overview'),/概览缺少/);
+  }
+  assert.throws(()=>core.parseGeneration(JSON.stringify({overview:overview(),note:'brief'}),'all'),/tags/);
+  assert.throws(()=>core.parseGeneration(JSON.stringify({overview:overview(),tags:['topic']}),'all'),/简记/);
+});
+
+test('overview notes have six labeled sections and preserve escaped evidence provenance', () => {
+  const value={...overview(),findings:'Reported A < B & C.\nNext line.'};
+  const result={overview:value,model:'model<img src=x>',sourceInfo:{hasAbstract:true,hasFulltext:true,truncated:true,fulltextSource:'Paper <draft>.pdf'}};
+  const html=core.renderOverviewNote(result,{title:'Paper',sourceWarnings:['Only <partial> PDF index available.']},{},{createdAt:'2026-11-12'});
+  assert.match(html,/<h1>AI 概览<\/h1>/);
+  assert.equal((html.match(/<h2>/g)||[]).length,6);
+  assert.match(html,/Reported A &lt; B &amp; C\.<br \/>Next line\./);
+  assert.match(html,/Paper &lt;draft&gt;.pdf/);
+  assert.match(html,/Only &lt;partial&gt; PDF index available/);
+  assert.match(html,/输入已截断/);
+  assert.ok(!html.includes('<img'));
+  const english=core.renderOverviewNote({overview:overview()},{title:'Paper'},{language:'en'});
+  assert.match(english,/<h1>AI Overview<\/h1>/);
+  assert.match(english,/<h2>Research question<\/h2>/);
+  assert.throws(()=>core.renderOverviewNote({overview:null},{title:'Paper'},{}),/概览/);
+});
+
+test('overview generation uses local JSON chat with detailed output budget and evidence bounds', async () => {
+  for(const mode of ['overview','all']) {
+    const calls=[];
+    const payload=mode==='all'?{tags:['local AI'],note:'A short evidence-based brief.',overview:overview()}:{overview:overview()};
+    const result=await core.generate(async request=>{
+      calls.push(request);
+      return request.url.endsWith('/api/show')?{capabilities:['completion'],model_info:{'example.context_length':16384}}:{message:{content:JSON.stringify(payload)},model:'local:8b'};
+    },{title:'Paper',abstract:'Only abstract evidence is available.',fulltext:'','sourceWarnings':['No PDF fulltext.']},mode,{model:'local:8b'});
+    assert.equal(calls.length,2);
+    assert.equal(calls[1].body.options.num_predict,4096);
+    assert.equal(calls[1].body.options.num_ctx,16384);
+    assert.equal(calls[1].body.format,'json');
+    assert.equal(calls[1].body.stream,false);
+    assert.deepEqual(result.overview,overview());
+    assert.equal(result.sourceInfo.hasFulltext,false);
+    assert.equal(result.sourceInfo.hasAbstract,true);
+    assert.deepEqual(result.sourceInfo.sourceWarnings,['No PDF fulltext.']);
+    assert.ok(Buffer.byteLength(calls[1].body.messages.map(message=>message.content).join('\n'))+calls[1].body.options.num_predict+64<=16384);
+    if(mode==='overview'){assert.deepEqual(result.tags,[]);assert.equal(result.note,'');}
+  }
 });

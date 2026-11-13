@@ -9,6 +9,37 @@
 
   const PREF = "extensions.ollama-local-ai.settings";
 
+  // Style stores its brief remark in an Extra field line. Keep the rest of
+  // Extra opaque so citation metadata and other plugins' values are preserved.
+  function styleRemarkLines(extra) {
+    const pieces = String(extra || "").split(/(\r\n|\n|\r)/);
+    const matches = [];
+    for (let index = 0; index < pieces.length; index += 2) {
+      const match = /^\s*remark\s*:\s?(.*)$/i.exec(pieces[index]);
+      if (match) matches.push({ index, value: match[1].trim() });
+    }
+    if (matches.length > 1) throw new Error("Extra 中存在多条 remark:，请先在 Zotero 中整理简记字段，未自动改写。");
+    return { pieces, match: matches[0] || null };
+  }
+
+  function readStyleRemark(extra) {
+    const { match } = styleRemarkLines(extra);
+    return match ? match.value : null;
+  }
+
+  function updateStyleRemark(extra, note) {
+    const original = String(extra || "");
+    const text = String(note || "").replace(/\s+/g, " ").trim();
+    if (!text) throw new Error("简记内容为空，未改写 Style 简记栏。");
+    const { pieces, match } = styleRemarkLines(original);
+    if (match) {
+      pieces[match.index] = "remark: " + text;
+      return pieces.join("");
+    }
+    const newline = (original.match(/\r\n|\n|\r/) || ["\n"])[0];
+    return "remark: " + text + (original ? newline + original : "");
+  }
+
   function create(deps) {
     const { Zotero, core } = deps;
 
@@ -62,6 +93,13 @@
       if (!item || !item.isRegularItem() || item.deleted) throw new Error("请选择有效的文献条目。");
       if (item.loadAllData) await item.loadAllData();
       const sourceWarnings = [];
+      let styleRemark = null;
+      let styleRemarkAmbiguous = false;
+      try { styleRemark = readStyleRemark(item.getField("extra")); }
+      catch (_) {
+        styleRemarkAmbiguous = true;
+        sourceWarnings.push("Extra 中存在多条 remark:；可生成子笔记，但需要先整理后才能写入 Style 简记栏。");
+      }
       const context = {
         title: readField(item, "title"),
         abstract: readField(item, "abstractNote"),
@@ -72,6 +110,8 @@
         publicationTitle: readField(item, "publicationTitle"),
         doi: readField(item, "DOI"),
         existingTags: item.getTags().map(tag => tag.tag),
+        styleRemark,
+        styleRemarkAmbiguous,
         fulltext: "",
         fulltextSource: "",
         truncated: false,
@@ -187,10 +227,12 @@
       return data;
     }
 
-    async function saveResult(itemID, result, context, rawSettings, mode) {
+    async function saveResult(itemID, result, context, rawSettings, mode, options = {}) {
       const settings = core.normalizeSettings(rawSettings);
-      const clean = core.parseGeneration(JSON.stringify({ tags: result.tags, note: result.note }), mode, settings);
+      const clean = core.parseGeneration(JSON.stringify({ tags: result.tags, note: result.note, overview: result.overview }), mode, settings);
       let noteID = null;
+      let overviewNoteID = null;
+      let styleRemarkUpdated = false;
       const addedTags = [];
       await Zotero.DB.executeTransaction(async () => {
         const item = await Zotero.Items.getAsync(itemID);
@@ -200,7 +242,37 @@
           throw new Error("该文献库为只读，无法添加标签或简记。");
         }
         if (item.loadAllData) await item.loadAllData();
-        if (mode === "tags" || mode === "both") {
+        const hasTags = core.modeIncludes(mode, "tags");
+        const hasNote = core.modeIncludes(mode, "note");
+        const hasOverview = core.modeIncludes(mode, "overview");
+        let newExtra = null;
+        if (hasNote && settings.briefTarget === "style-and-note") {
+          const extra = String(item.getField("extra") || "");
+          const currentRemark = readStyleRemark(extra);
+          if (!context || context.styleRemark === undefined || context.styleRemarkAmbiguous) {
+            throw new Error("缺少有效的 Style 简记预览，请重新生成或刷新文献后再保存。");
+          }
+          if (currentRemark !== context.styleRemark) {
+            throw new Error("Style 简记在生成后已被修改，未覆盖。请重新生成并检查最新简记。");
+          }
+          const newRemark = clean.note.replace(/\s+/g, " ").trim();
+          if (currentRemark !== newRemark) {
+            if (currentRemark && options.allowStyleOverwrite !== true) {
+              throw new Error("Style 已有简记。请先检查原内容，并勾选允许更新已有简记后保存。");
+            }
+            newExtra = updateStyleRemark(extra, newRemark);
+          }
+        }
+        const metadata = {
+          model: result.model || settings.model,
+          sourceInfo: result.sourceInfo,
+          createdAt: new Date().toISOString()
+        };
+        // Render before changing the parent item. Network work never enters
+        // the transaction, and invalid output cannot leave partial mutations.
+        const noteHTML = hasNote ? core.renderNote(clean, context, settings, metadata) : null;
+        const overviewHTML = hasOverview ? core.renderOverviewNote(clean, context, settings, metadata) : null;
+        if (hasTags) {
           const existing = new Set(item.getTags().map(tag => tag.tag.normalize("NFKC").trim().toLocaleLowerCase()));
           for (const tag of clean.tags) {
             const key = tag.normalize("NFKC").trim().toLocaleLowerCase();
@@ -209,25 +281,32 @@
             existing.add(key);
             addedTags.push(tag);
           }
-          if (addedTags.length) await item.save();
         }
-        if (mode === "note" || mode === "both") {
+        if (newExtra !== null) {
+          item.setField("extra", newExtra);
+          styleRemarkUpdated = true;
+        }
+        if (addedTags.length || styleRemarkUpdated) await item.save();
+        if (hasNote) {
           const note = new Zotero.Item("note");
           note.libraryID = item.libraryID;
           note.parentID = item.id;
-          note.setNote(core.renderNote(clean, context, settings, {
-            model: result.model || settings.model,
-            sourceInfo: result.sourceInfo,
-            createdAt: new Date().toISOString()
-          }));
+          note.setNote(noteHTML);
           noteID = await note.save();
         }
+        if (hasOverview) {
+          const overview = new Zotero.Item("note");
+          overview.libraryID = item.libraryID;
+          overview.parentID = item.id;
+          overview.setNote(overviewHTML);
+          overviewNoteID = await overview.save();
+        }
       });
-      return { addedTags, noteID };
+      return { addedTags, noteID, overviewNoteID, styleRemarkUpdated };
     }
 
-    return { loadSettings, saveSettings, getSelectedItems, getItem, collectContext, transport, saveResult };
+    return { loadSettings, saveSettings, getSelectedItems, getItem, collectContext, transport, saveResult, readStyleRemark, updateStyleRemark };
   }
 
-  return { create, PREF };
+  return { create, PREF, readStyleRemark, updateStyleRemark };
 });

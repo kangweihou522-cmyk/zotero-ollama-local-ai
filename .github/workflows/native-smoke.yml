@@ -1,0 +1,58 @@
+name: Native Zotero smoke
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'addon/**'
+      - 'tests/**'
+      - 'scripts/build.py'
+      - 'package.json'
+      - 'updates.json'
+      - '.github/workflows/native-smoke.yml'
+  pull_request:
+    paths:
+      - 'addon/**'
+      - 'tests/**'
+      - 'scripts/build.py'
+      - 'package.json'
+      - 'updates.json'
+      - '.github/workflows/native-smoke.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-zotero-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      NATIVE_SMOKE_DIR: ${{ runner.temp }}/zotero-local-ai-native-smoke
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install native display/runtime dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb xauth libgtk-3-0 libdbus-glib-1-2 libx11-xcb1 libxt6
+      - name: Run dependency-free regression tests
+        run: npm test
+      - name: Build the exact installer under test
+        run: python3 scripts/build.py
+      - name: Install and exercise the XPI in real Zotero 10.0.8
+        run: bash tests/native/run.sh
+      - name: Upload synthetic smoke results and native logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zotero-10.0.8-native-smoke
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            ${{ env.NATIVE_SMOKE_DIR }}/result.json
+            ${{ env.NATIVE_SMOKE_DIR }}/*.log
+            ${{ env.NATIVE_SMOKE_DIR }}/profile.*/native-smoke.json
