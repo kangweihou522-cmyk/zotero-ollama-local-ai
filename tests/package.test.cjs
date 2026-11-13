@@ -63,6 +63,19 @@ test('build rejects mismatched release downloads and compatibility ranges',t=>{
   assert.match(range.stderr,/compatibility ranges must match/);
 });
 
+test('build refuses an incomplete dual-engine installer before producing an XPI',t=>{
+  const dir=temporary(t);
+  fs.cpSync(path.join(root,'addon'),path.join(dir,'addon'),{recursive:true});
+  fs.mkdirSync(path.join(dir,'scripts'));
+  fs.copyFileSync(path.join(root,'scripts/build.py'),path.join(dir,'scripts/build.py'));
+  for(const file of ['package.json','updates.json'])fs.copyFileSync(path.join(root,file),path.join(dir,file));
+  fs.rmSync(path.join(dir,'addon/content/engine.js'),{force:true});
+  const result=spawnSync('python3',[path.join(dir,'scripts/build.py')],{encoding:'utf8'});
+  assert.notEqual(result.status,0);
+  assert.match(result.stderr,/Missing addon resource: content\/engine\.js/);
+  assert.equal(fs.existsSync(path.join(dir,'dist')),false);
+});
+
 test('built XPI has a root manifest and bootstrap, and source archive includes update metadata and packaging tests',t=>{
   const dir=temporary(t);
   const built=spawnSync('python3',[path.join(root,'scripts/build.py'),'--output',dir],{encoding:'utf8'});
@@ -74,10 +87,12 @@ test('built XPI has a root manifest and bootstrap, and source archive includes u
     'with zipfile.ZipFile(directory/f"ollama-local-ai-{version}.xpi") as z:',
     ' assert z.testzip() is None',
     ' assert "manifest.json" in z.namelist() and "bootstrap.js" in z.namelist()',
+    ' assert "content/chatgpt.js" in z.namelist() and "content/engine.js" in z.namelist()',
     ' assert json.loads(z.read("manifest.json"))["applications"]["zotero"]["update_url"]',
     'with zipfile.ZipFile(directory/f"ollama-local-ai-{version}-source.zip") as z:',
     ' assert z.testzip() is None',
     ' assert "updates.json" in z.namelist() and "tests/package.test.cjs" in z.namelist()',
+    ' assert "tests/chatgpt.test.cjs" in z.namelist() and "tests/engine.test.cjs" in z.namelist()',
     ' if (root/".github/workflows/native-smoke.yml").is_file():',
     '  assert ".github/workflows/native-smoke.yml" in z.namelist()',
     ' assert not any(name.startswith((".git/","downloads/","node_modules/")) for name in z.namelist())',

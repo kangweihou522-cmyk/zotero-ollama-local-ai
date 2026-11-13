@@ -20,7 +20,10 @@ test('settings normalize bounds and preserve explicit preferences', () => {
   assert.equal(settings.temperature, 0);
   assert.equal(settings.model, 'qwen3:8b');
   assert.equal(settings.language, 'en');
-  assert.equal(settings.contextTokens, 16384);
+  assert.equal(settings.contextTokens, 8192);
+  assert.equal(settings.profile,'fast');
+  assert.equal(settings.provider,'ollama');
+  assert.equal(settings.cacheEnabled,true);
   assert.equal(settings.briefTarget, 'note');
   assert.equal(core.normalizeSettings({briefTarget:'style-and-note'}).briefTarget,'style-and-note');
   assert.equal(core.normalizeSettings({briefTarget:'overwrite-extra'}).briefTarget,'note');
@@ -97,7 +100,7 @@ test('model listing filters cloud models and aliases with remote metadata', asyn
   assert.equal(calls[0].method,'GET');
 });
 
-test('generation verifies local model and sends nonstreaming JSON chat request', async () => {
+test('generation verifies local model and sends streaming JSON chat request', async () => {
   const calls=[];
   const transport=async request=>{
     calls.push(request);
@@ -106,7 +109,7 @@ test('generation verifies local model and sends nonstreaming JSON chat request',
   const result=await core.generate(transport,{title:'Paper',abstract:'Evidence'},'both',{model:'local:8b'});
   assert.equal(calls.length,2);
   assert.equal(calls[0].url,'http://127.0.0.1:11434/api/show');
-  assert.equal(calls[1].body.stream,false);
+  assert.equal(calls[1].body.stream,true);
   assert.equal(calls[1].body.format,'json');
   assert.equal(calls[1].body.model,'local:8b');
   assert.equal(result.note,'Evidence note.');
@@ -137,7 +140,7 @@ test('thinking controls use advertised supported values and legacy Qwen3 capabil
       if(request.url.endsWith('/api/show')) return show;
       sent=request.body;
       return {message:{content:'{"tags":["topic"]}'}};
-    },{title:'Example'},'tags',{model:'local'});
+    },{title:'Example'},'tags',{model:'local',profile:'custom',contextTokens:16384});
     assert.equal(sent.think,expected);
     assert.equal(sent.options.num_predict,budget);
   }
@@ -149,7 +152,7 @@ test('context requests respect the model advertised limit and cap reasoning outp
     if(request.url.endsWith('/api/show')) return {capabilities:['completion','thinking'],thinking:{values:[true]},model_info:{'general.architecture':'example','example.context_length':4096}};
     sent=request.body;
     return {message:{content:'{"note":"Note"}'}};
-  },{title:'Paper',fulltext:'Evidence '.repeat(10000)},'note',{model:'local',contextTokens:16384});
+  },{title:'Paper',fulltext:'Evidence '.repeat(10000)},'note',{model:'local',profile:'custom',contextTokens:16384});
   assert.equal(sent.options.num_ctx,4096);
   assert.ok(sent.options.num_predict<=Math.max(512,Math.floor(4096/3)));
   assert.equal(result.sourceInfo.contextTokens,4096);
@@ -258,12 +261,12 @@ test('overview generation uses local JSON chat with detailed output budget and e
     const result=await core.generate(async request=>{
       calls.push(request);
       return request.url.endsWith('/api/show')?{capabilities:['completion'],model_info:{'example.context_length':16384}}:{message:{content:JSON.stringify(payload)},model:'local:8b'};
-    },{title:'Paper',abstract:'Only abstract evidence is available.',fulltext:'','sourceWarnings':['No PDF fulltext.']},mode,{model:'local:8b'});
+    },{title:'Paper',abstract:'Only abstract evidence is available.',fulltext:'','sourceWarnings':['No PDF fulltext.']},mode,{model:'local:8b',profile:'custom',contextTokens:16384});
     assert.equal(calls.length,2);
     assert.equal(calls[1].body.options.num_predict,4096);
     assert.equal(calls[1].body.options.num_ctx,16384);
     assert.equal(calls[1].body.format,'json');
-    assert.equal(calls[1].body.stream,false);
+    assert.equal(calls[1].body.stream,true);
     assert.deepEqual(result.overview,overview());
     assert.equal(result.sourceInfo.hasFulltext,false);
     assert.equal(result.sourceInfo.hasAbstract,true);
@@ -271,4 +274,187 @@ test('overview generation uses local JSON chat with detailed output budget and e
     assert.ok(Buffer.byteLength(calls[1].body.messages.map(message=>message.content).join('\n'))+calls[1].body.options.num_predict+64<=16384);
     if(mode==='overview'){assert.deepEqual(result.tags,[]);assert.equal(result.note,'');}
   }
+});
+
+test('task presets lower local memory and input work while custom values remain explicit', () => {
+  for(const mode of ['tags','note','both']) {
+    const value=core.effectiveSettings({contextTokens:32768,maxInputChars:90000,includeFulltext:true},mode);
+    assert.equal(value.contextTokens,4096);
+    assert.equal(value.maxInputChars,4000);
+    assert.equal(value.includeFulltext,false);
+    assert.deepEqual(core.effectiveSettings(value,mode),value);
+  }
+  for(const mode of ['overview','all']) {
+    const value=core.effectiveSettings({},mode);
+    assert.equal(value.contextTokens,8192);
+    assert.equal(value.maxInputChars,8000);
+    assert.equal(value.includeFulltext,false);
+  }
+  assert.equal(core.effectiveSettings({profile:'balanced'},'tags').includeFulltext,true);
+  assert.equal(core.effectiveSettings({profile:'balanced'},'tags').maxInputChars,12000);
+  const custom=core.effectiveSettings({profile:'custom',contextTokens:32768,maxInputChars:10000,includeFulltext:true},'note');
+  assert.equal(custom.contextTokens,32768);
+  assert.equal(custom.maxInputChars,10000);
+  assert.equal(custom.includeFulltext,true);
+  const cloud=core.normalizeSettings({provider:'chatgpt',chatgptModel:' selected ',cacheEnabled:'false',keepAliveMinutes:100});
+  assert.equal(cloud.provider,'chatgpt');assert.equal(cloud.chatgptModel,'selected');
+  assert.equal(cloud.cacheEnabled,false);assert.equal(cloud.keepAliveMinutes,30);
+});
+
+test('in-memory cache clones data, expires entries and evicts the least-recently-used value', () => {
+  let time=10;
+  const cache=core.createGenerationCache({maxEntries:2,ttlMs:20,now:()=>time});
+  const original={tags:['A'],overview:{methods:'Evidence'}};
+  cache.set('a',original);original.tags.push('mutation');
+  assert.deepEqual(cache.get('a').tags,['A']);
+  const retrieved=cache.get('a');retrieved.overview.methods='mutation';
+  assert.equal(cache.get('a').overview.methods,'Evidence');
+  cache.set('b',{note:'B'});cache.get('a');cache.set('c',{note:'C'});
+  assert.equal(cache.get('b'),undefined);
+  assert.equal(cache.size,2);
+  time=30;
+  assert.equal(cache.get('a'),undefined);assert.equal(cache.size,0);
+  cache.set('d',{note:'D'});cache.clear();assert.equal(cache.size,0);
+});
+
+test('cache keys separate providers, model, evidence, mode and writing preferences without storing credentials', () => {
+  const context={title:'Paper',abstract:'Original abstract',styleRemark:'Private previous remark',existingTags:['A']};
+  const settings={model:'local',profile:'custom'};
+  const key=core.generationCacheKey(context,'both',settings);
+  for(const modified of [{...settings,model:'other'},{...settings,provider:'chatgpt',chatgptModel:'other'},
+    {...settings,instructions:'different'},{...settings,language:'en'},{...settings,maxTags:2},
+    {...settings,contextTokens:4096},{...settings,includeFulltext:false}]) {
+    assert.notEqual(core.generationCacheKey(context,'both',modified),key);
+  }
+  assert.notEqual(core.generationCacheKey({...context,abstract:'Changed'},'both',settings),key);
+  assert.notEqual(core.generationCacheKey({...context,existingTags:['B']},'both',settings),key);
+  assert.notEqual(core.generationCacheKey(context,'note',settings),key);
+  assert.equal(core.generationCacheKey({...context,styleRemark:'Changed write state'},'both',settings),key);
+  assert.equal(core.generationCacheKey(context,'both',{...settings,accessToken:'sensitive-token',refreshToken:'private-refresh'}),key);
+  assert.ok(!key.includes('Private previous remark'));
+  assert.equal(core.generationCacheKey({...context,fulltext:'excluded A'},'note',{model:'local'}),
+    core.generationCacheKey({...context,fulltext:'excluded B'},'note',{model:'local'}));
+});
+
+function streamText(content, metrics={}) {
+  return [JSON.stringify({model:'local',message:{role:'assistant',thinking:'Do not reveal this reasoning',content:content.slice(0,9)},done:false}),
+    JSON.stringify({model:'local',message:{role:'assistant',content:content.slice(9)},done:false}),
+    JSON.stringify({model:'local',message:{role:'assistant',content:''},done:true,done_reason:'stop',...metrics})].join('\r\n')+'\n';
+}
+
+test('stream decoder handles arbitrary chunk boundaries and keeps reasoning out of answer text', () => {
+  const answer=JSON.stringify({note:'中文😀简记，包含换行转义\n与引号"。'});
+  const raw=streamText(answer);
+  const previews=[];
+  const decoder=core.createOllamaStreamDecoder(frame=>previews.push(frame.text));
+  for(let index=0;index<raw.length;index+=3)decoder.push(raw.slice(index,index+3));
+  assert.equal(decoder.finish().message.content,answer);
+  assert.ok(previews.every(value=>!value.includes('Do not reveal')));
+  assert.equal(decoder.frameCount,3);
+});
+
+test('stream decoder refuses errors, malformed lines, remote responses and incomplete output', () => {
+  for(const raw of [
+    '{"message":{"content":"partial"},"done":false}\n',
+    '{broken}\n',
+    '{"error":"bad model"}\n',
+    '{"remote_host":"https://remote","done":true,"message":{"content":"x"}}\n',
+    '{"done":true,"done_reason":"length","message":{"content":"x"}}\n',
+    '{"done":true,"message":{"content":""}}\n',
+    '{"done":true,"message":{"content":"x"}}\n{"done":true}\n',
+  ]) {
+    const decoder=core.createOllamaStreamDecoder();
+    assert.throws(()=>{decoder.push(raw);decoder.finish();},undefined,raw);
+  }
+});
+
+test('streamed local generation reports actual metrics and reduced fast-task budgets', async () => {
+  const output=JSON.stringify({tags:['Topic'],note:'Evidence-based brief.'});
+  const raw=streamText(output,{eval_count:20,eval_duration:500000000,load_duration:250000000,prompt_eval_count:60});
+  const requests=[],events=[];
+  const transport=async request=>{
+    requests.push(request);
+    if(request.url.endsWith('/api/show'))return {capabilities:['completion']};
+    for(let index=0;index<raw.length;index+=5)request.onChunk(raw.slice(index,index+5));
+    return raw;
+  };
+  const result=await core.generate(transport,{title:'Paper',abstract:'Evidence',fulltext:'ignored PDF'},'both',{model:'local'},undefined,{onProgress:event=>events.push(event)});
+  assert.equal(requests[1].stream,true);
+  assert.equal(requests[1].body.stream,true);
+  assert.equal(requests[1].body.options.num_ctx,4096);
+  assert.equal(requests[1].body.options.num_predict,512);
+  assert.equal(requests[1].body.keep_alive,'10m');
+  assert.equal(result.note,'Evidence-based brief.');
+  assert.equal(result.sourceInfo.hasFulltext,false);
+  assert.equal(result.stats.outputTokens,20);assert.equal(result.stats.inputTokens,60);
+  assert.equal(result.stats.generationMs,500);assert.equal(result.stats.loadMs,250);
+  assert.equal(result.stats.tokensPerSecond,40);assert.equal(result.cacheHit,false);
+  assert.equal(result.provider,'ollama');
+  assert.ok(events.some(event=>event.stage==='streaming'));
+  assert.ok(events.every(event=>!JSON.stringify(event).includes('Do not reveal')));
+});
+
+test('final raw body supplies missing progress tail without duplicating streamed answer content', async () => {
+  for(const prefixLength of [0,17]) {
+    const raw=streamText('{"note":"Completed"}');
+    const result=await core.generate(async request=>{
+      if(request.url.endsWith('/api/show'))return {};
+      if(prefixLength)request.onChunk(raw.slice(0,prefixLength));
+      return raw;
+    },{title:'Paper'},'note',{model:'local'});
+    assert.equal(result.note,'Completed');
+  }
+});
+
+test('identical successful generations are cached without model calls or editable-result mutation', async () => {
+  let chats=0,shows=0;
+  const transport=async request=>{
+    if(request.url.endsWith('/api/show')){shows++;return {};}
+    chats++;return streamText('{"tags":["Topic"],"note":"Original"}');
+  };
+  const context={title:'Cache paper'},settings={model:'local'};
+  const first=await core.generate(transport,context,'both',settings);
+  first.tags.push('Edited');first.note='User draft';
+  const events=[];
+  const second=await core.generate(transport,context,'both',settings,undefined,{onProgress:event=>events.push(event)});
+  assert.equal(second.cacheHit,true);assert.equal(second.note,'Original');
+  assert.deepEqual(second.tags,['Topic']);assert.equal(chats,1);assert.equal(shows,1);
+  assert.ok(events.some(event=>event.stage==='cache-hit'));
+  await core.generate(transport,{title:'Changed paper'},'both',settings);
+  assert.equal(chats,2);assert.equal(shows,1,'model info may be reused briefly across document inputs');
+  await core.generate(transport,context,'both',settings,undefined,{forceRefresh:true});
+  assert.equal(chats,3);assert.equal(shows,2);
+  core.clearCache();
+  await core.generate(transport,context,'both',settings);
+  assert.equal(chats,4);assert.equal(shows,3);
+});
+
+test('disabled, failed and cancelled generations do not populate reusable result cache', async () => {
+  const cache=core.createGenerationCache();
+  let chats=0;
+  const transport=async request=>{
+    if(request.url.endsWith('/api/show'))return {};
+    chats++;return streamText('{"note":"OK"}');
+  };
+  for(let index=0;index<2;index++)await core.generate(transport,{title:'Disabled'},'note',{model:'local',cacheEnabled:false},undefined,{cache});
+  assert.equal(chats,2);assert.equal(cache.size,0);
+  await assert.rejects(()=>core.generate(async request=>request.url.endsWith('/api/show')?{}:'{"message":{"content":"partial"},"done":false}\n',{title:'Failed'},'note',{model:'local'},undefined,{cache}),/提前结束/);
+  assert.equal(cache.size,0);
+  const controller=new AbortController();
+  await assert.rejects(()=>core.generate(async request=>{
+    if(request.url.endsWith('/api/show'))return {};
+    controller.abort();return streamText('{"note":"Aborted"}');
+  },{title:'Cancelled'},'note',{model:'local'},controller.signal,{cache}),{name:'AbortError'});
+  assert.equal(cache.size,0);
+});
+
+test('ChatGPT settings cannot silently enter local generation and provenance labels the selected engine', async () => {
+  let calls=0;
+  await assert.rejects(()=>core.generate(async()=>{calls++;return {};},{title:'Cloud'},'note',{provider:'chatgpt',chatgptModel:'selected',model:'local'}),/官方授权/);
+  assert.equal(calls,0);
+  const settings={provider:'chatgpt',chatgptModel:'selected'};
+  const html=core.renderNote({note:'Cloud brief',provider:'chatgpt'},{title:'Paper'},settings);
+  assert.match(html,/ChatGPT 订阅 · selected/);
+  assert.ok(!html.includes('本地 Ollama'));
+  assert.ok(!core.buildMessages({title:'Paper'},'note',settings)[0].content.includes('running locally'));
 });

@@ -93,6 +93,7 @@ def main():
     updates = json.loads((ROOT / "updates.json").read_text(encoding="utf-8"))
     version = validate_metadata(manifest, package, updates)
     for required in ["bootstrap.js", "content/core.js", "content/zotero-adapter.js",
+                     "content/chatgpt.js", "content/engine.js",
                      "content/main.js", "content/dialog.xhtml", "content/dialog.js",
                      "content/dialog.css", "content/preferences.xhtml", "content/preferences.js",
                      "content/icon.svg", "locale/en-US/ollama-local-ai.ftl", "locale/zh-CN/ollama-local-ai.ftl"]:

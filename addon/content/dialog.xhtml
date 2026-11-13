@@ -22,6 +22,7 @@
         <h:button id="generate" class="primary" type="button">开始生成</h:button>
         <h:button id="cancel" type="button" disabled="disabled">停止</h:button>
       </h:div>
+      <h:div class="run-options"><h:label class="check"><h:input id="force-refresh" type="checkbox"/>忽略缓存，重新请求模型</h:label><h:span id="preset-summary" class="hint"/></h:div>
       <h:div class="workspace">
         <h:aside class="queue">
           <h:div class="queue-heading"><h:strong>选中文献</h:strong><h:span id="item-count" class="muted"/></h:div>
@@ -31,6 +32,7 @@
         <h:div class="editor">
           <h:h2 id="item-title">请先在文献库选中文献</h:h2>
           <h:div id="source-info" class="source-info">支持多选；选中附件时会使用其所属文献。</h:div>
+          <h:div id="live-area" class="live-area" hidden="hidden"><h:strong>正在生成</h:strong><h:pre id="live-output" aria-live="polite"/></h:div>
           <h:div id="tags-area">
             <h:label for="result-tags" class="field-label">建议标签 <h:span class="muted">每行一个，可直接修改</h:span></h:label>
             <h:textarea id="result-tags" rows="4" placeholder="生成的标签会显示在这里" disabled="disabled"/>
@@ -68,19 +70,33 @@
     <h:section id="panel-settings" hidden="hidden">
       <h:div class="settings-grid">
         <h:section class="card">
-          <h:h2>本地模型</h:h2>
+          <h:h2>生成引擎</h:h2>
+          <h:label for="provider" class="field-label">模型来源</h:label>
+          <h:select id="provider"><h:option value="ollama">本地 Ollama</h:option><h:option value="chatgpt">ChatGPT 订阅授权（预览）</h:option></h:select>
+          <h:div id="ollama-settings">
           <h:label for="endpoint" class="field-label">Ollama 地址</h:label>
           <h:input id="endpoint" type="url" placeholder="http://127.0.0.1:11434"/>
           <h:p class="hint">仅接受本机回环地址；Ollama 原生 API，不需要 API Key。</h:p>
-          <h:label for="model" class="field-label">已安装模型</h:label>
+          <h:div class="setup"><h:code>ollama list</h:code><h:p>选择本机已部署的模型。RTX 3060 6GB 建议先用能完全载入显存的 4B 量化模型和快速预设。</h:p></h:div>
+          <h:button id="runtime-info" type="button">检查模型 GPU 驻留</h:button><h:p id="runtime-status" class="hint"/>
+          </h:div>
+          <h:div id="chatgpt-settings" hidden="hidden">
+            <h:p id="chatgpt-status" class="hint" aria-live="polite">尚未登录 ChatGPT。</h:p>
+            <h:div class="inline auth-buttons"><h:button id="chatgpt-login" class="primary" type="button">Continue with ChatGPT</h:button><h:button id="chatgpt-other-account" type="button">使用其他账户</h:button><h:button id="chatgpt-logout" type="button" disabled="disabled">退出登录</h:button><h:button id="cancel-login" type="button" hidden="hidden">取消登录</h:button></h:div>
+            <h:label for="chatgpt-account" class="field-label">已授权账户</h:label><h:select id="chatgpt-account"><h:option value="">尚未登录</h:option></h:select>
+            <h:p class="hint">通过 OpenAI 官方页面登录并授权订阅额度，不需要 API Key。可用模型和限额以账户为准，实际登录需在你的电脑完成。</h:p>
+            <h:p class="cloud-disclosure">选择此引擎并开始生成，会把选中文献的标题、摘要或所选 PDF 索引材料发送到 OpenAI，并消耗 ChatGPT 订阅额度。不会自动改用 API Key 计费。</h:p>
+          </h:div>
+          <h:label id="model-label" for="model" class="field-label">已安装模型</h:label>
           <h:div class="inline"><h:select id="model" class="grow"><h:option value="">请先检测连接并选择模型</h:option></h:select><h:button id="refresh-models" type="button">检测连接</h:button></h:div>
           <h:p id="connection-status" class="hint" aria-live="polite">先运行 ollama serve，再下载需要的模型。</h:p>
-          <h:div class="setup"><h:code>ollama pull qwen3:8b</h:code><h:p>这只是安装示例。请根据内存或显存选择模型大小，下载完成后点击「检测连接」。</h:p></h:div>
           <h:label class="check"><h:input id="include-fulltext" type="checkbox"/>使用可用的本地 PDF 全文索引</h:label>
           <h:p class="hint">不自动下载附件。未建立索引或扫描件没有文字时，仅使用元数据。简记会注明材料来源。</h:p>
         </h:section>
         <h:section class="card">
           <h:h2>生成偏好</h:h2>
+          <h:label for="profile" class="field-label">性能预设</h:label><h:select id="profile"><h:option value="fast">3060 6GB 快速 · 仅摘要，概览按需</h:option><h:option value="balanced">均衡 · 8K 上下文，读取可用 PDF 索引</h:option><h:option value="custom">自定义</h:option></h:select>
+          <h:p class="hint">快速模式：标签／简记用 4K 上下文、最多 4000 字符；概览用 8K、最多 8000 字符。默认先生成标签与简记。</h:p>
           <h:div class="two-columns">
             <h:div><h:label for="language" class="field-label">输出语言</h:label><h:select id="language"><h:option value="zh-CN">简体中文</h:option><h:option value="en">English</h:option></h:select></h:div>
             <h:div><h:label for="max-tags" class="field-label">最多标签数</h:label><h:input id="max-tags" type="number" min="1" max="20"/></h:div>
@@ -90,10 +106,11 @@
           </h:div>
           <h:label for="instructions" class="field-label">补充要求（可选）</h:label>
           <h:textarea id="instructions" rows="5" placeholder="例如：标签优先标明研究对象和方法；概览重点说明实验设计与证据局限。"/>
-          <h:p class="hint">输入会按字符上限和上下文预算截断。上下文越大，内存占用越高；默认 16384 tokens，低内存可选 4096 或 8192。冷启动较慢时可延长超时。</h:p>
+          <h:p class="hint">自定义模式可直接调整上下文与材料量。长上下文会增加显存占用；流式显示让你更早看到输出，实际推理速度取决于模型与硬件。</h:p>
+          <h:label class="check"><h:input id="cache-enabled" type="checkbox"/>复用相同材料、模型和任务的生成结果</h:label><h:p class="hint">缓存只保留在本次 Zotero 运行内存中，最多 50 条、最长 24 小时。修改预览不会改变缓存。</h:p><h:button id="clear-cache" type="button">清空结果缓存</h:button>
         </h:section>
       </h:div>
-      <h:div class="settings-footer"><h:p class="hint grow">生成请求只发往配置的本机地址。笔记和标签仍遵循你的 Zotero 同步设置。</h:p><h:button id="save-settings" class="primary" type="button">保存设置</h:button></h:div>
+      <h:div class="settings-footer"><h:p class="hint grow">Ollama 在本机生成；ChatGPT 模式通过官方订阅授权使用云端模型。保存内容遵循 Zotero 同步设置。</h:p><h:button id="save-settings" class="primary" type="button">保存设置</h:button></h:div>
     </h:section>
   </h:main>
   <script src="dialog.js"/>

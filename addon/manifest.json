@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
   "name": "Ollama Local AI · 本地标签、简记与概览",
-  "version": "0.2.0",
-  "description": "使用本地 Ollama 为文献生成标签、简记和概览，预览并编辑后保存。",
+  "version": "0.3.0",
+  "description": "支持 Ollama 本地快速预设与官方 ChatGPT 订阅授权，流式生成标签、简记和概览，预览后保存。",
   "author": "Ollama Local AI contributors",
   "applications": {
     "zotero": {

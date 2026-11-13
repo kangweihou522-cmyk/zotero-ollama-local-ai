@@ -4,13 +4,15 @@
 var nativeSmokeStarted = false;
 var nativeSmokeFinished = false;
 var nativeSmokeReport = { success: false, stages: [] };
+var nativeSmokeDriverRootURI;
 
 function install() {}
 function uninstall() {}
 function shutdown() {}
 
-function startup() {
+function startup({ rootURI }) {
   if (nativeSmokeStarted) return;
+  nativeSmokeDriverRootURI = rootURI;
   nativeSmokeStarted = true;
   // Plugin startup is awaited by Zotero.Plugins.init(), before the UI becomes
   // ready. Do not return this Promise or wait for uiReadyPromise in startup.
@@ -114,23 +116,35 @@ async function nativeSmokeRun() {
     const notice = dialog.document.getElementById("notice");
     return notice && !notice.textContent.includes("正在加载");
   }, "dialog JavaScript initialization");
-  for (const id of ["mode", "generate", "endpoint", "model", "result-note", "result-tags"]) {
+  for (const id of ["mode", "generate", "endpoint", "model", "result-note", "result-tags", "provider", "profile", "live-output", "chatgpt-login"]) {
     nativeSmokeCheck(dialog.document.getElementById(id), "Chrome dialog is missing control " + id);
   }
   const bridge = dialog.arguments?.[0];
   nativeSmokeCheck(bridge?.core?.generate && bridge?.adapter?.saveResult, "Chrome dialog bridge is missing its production APIs");
+  nativeSmokeCheck(bridge.engine?.generate && bridge.engine?.login, "Dual-engine bridge is missing");
+  nativeSmokeCheck(dialog.document.getElementById("mode").value === "both", "Default task should avoid generating a long overview");
+  nativeSmokeCheck(dialog.document.getElementById("context-tokens").value === "4096", "Default brief task did not apply the 6GB fast context");
   nativeSmokeCheck([...dialog.document.getElementById("mode").options].some(option => option.value === "all"), "Real dialog has no all-features mode");
   await nativeSmokeStage("chrome-dialog-ready", { title: dialog.document.title });
 
-  const { core, adapter } = bridge;
-  const settings = core.normalizeSettings({
+  const authTestScope = { Zotero, Services, ChromeUtils, Components, URL, URLSearchParams, TextEncoder,
+    crypto: Zotero.getMainWindow().crypto, setTimeout, clearTimeout };
+  authTestScope.globalThis = authTestScope;
+  Services.scriptloader.loadSubScript(nativeSmokeDriverRootURI + "chatgpt-native.js", authTestScope, "UTF-8");
+  const authDetails = await authTestScope.runChatGPTNativeSmoke(authTestScope);
+  await nativeSmokeStage("subscription-native-callback-and-vault-passed", authDetails);
+
+  const { core, adapter, engine } = bridge;
+  const settings = core.effectiveSettings({
     endpoint: "http://127.0.0.1:11435",
     model: "smoke-model",
     includeFulltext: false,
     briefTarget: "style-and-note",
     timeoutSeconds: 15,
-    contextTokens: 8192
-  });
+    contextTokens: 8192,
+    cacheEnabled: true,
+    profile: "fast"
+  }, "all");
   const models = await core.listModels(adapter.transport, settings);
   nativeSmokeCheck(models.some(model => model.name === settings.model), "Native HTTP did not list the loopback model");
   const item = new Zotero.Item("journalArticle");
@@ -142,7 +156,15 @@ async function nativeSmokeRun() {
   item.addTag("preserved fixture", 1);
   await item.saveTx();
   const context = await adapter.collectContext(item, settings);
-  const generated = await core.generate(adapter.transport, context, "all", settings);
+  let streamEvents=0;
+  const generated = await engine.generate(context, "all", settings, undefined, {onProgress(event){if(event.stage==="streaming"&&event.text)streamEvents++;}});
+  nativeSmokeCheck(streamEvents>0,"Native streaming did not produce answer progress");
+  nativeSmokeCheck(generated.stats?.tokensPerSecond===50,"Native response metrics were not retained");
+  const cached=await engine.generate(context,"all",settings);
+  nativeSmokeCheck(cached.cacheHit===true,"Native generation cache did not reuse identical evidence");
+  const runtime=await adapter.getRuntimeInfo(settings);
+  nativeSmokeCheck(runtime.selectedModel?.processor==="gpu","Native runtime diagnostics did not parse fixture residency");
+  await nativeSmokeStage("native-streaming-cache-and-runtime-passed", {streamEvents,cacheHit:cached.cacheHit});
   const saved = await adapter.saveResult(item.id, generated, context, settings, "all");
   nativeSmokeCheck(saved.noteID && saved.overviewNoteID && saved.noteID !== saved.overviewNoteID, "Native save did not create distinct brief and overview notes");
   nativeSmokeCheck(saved.styleRemarkUpdated, "Native save did not update the optional Style remark");

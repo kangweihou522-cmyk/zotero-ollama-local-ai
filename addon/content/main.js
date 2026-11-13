@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 var OllamaLocalMain = (() => {
   const adapter = OllamaZoteroAdapter.create({ Zotero, Services, Cc, Ci, Cr, ChromeUtils, core: OllamaLocalCore });
+  const chatgpt = OllamaChatGPT.create({ Zotero, Services, Components, Cc, Ci, ChromeUtils, crypto });
+  const engine = OllamaGenerationEngine.create({ core: OllamaLocalCore, adapter, chatgpt });
   const windows = new Set();
   const dialogs = new Set();
   const menuIDs = [];
@@ -18,13 +20,14 @@ var OllamaLocalMain = (() => {
     for (const link of links) link.remove();
   }
 
-  function open(win, mode = "all", settingsPage = false) {
+  function open(win, mode = "both", settingsPage = false) {
     win = win || Zotero.getMainWindow();
     if (!win) return;
     const items = adapter.getSelectedItems(win);
     const bridge = {
       core: OllamaLocalCore,
       adapter,
+      engine,
       version: identity.version,
       hostVersion: Zotero.version || "10",
       mode,
@@ -47,11 +50,11 @@ var OllamaLocalMain = (() => {
     identity = info;
     for (const win of Zotero.getMainWindows()) addWindow(win);
     const actions = [
-      ["all", "ollama-local-ai-all"],
+      ["both", "ollama-local-ai-both"],
       ["tags", "ollama-local-ai-tags"],
       ["note", "ollama-local-ai-note"],
       ["overview", "ollama-local-ai-overview"],
-      ["both", "ollama-local-ai-both"]
+      ["all", "ollama-local-ai-all"]
     ];
     const menus = actions.map(([mode, l10nID]) => ({
       menuType: "menuitem", l10nID,
@@ -60,7 +63,7 @@ var OllamaLocalMain = (() => {
     }));
     menus.push({ menuType: "separator" }, {
       menuType: "menuitem", l10nID: "ollama-local-ai-settings",
-      onCommand: event => open(owner(event), "all", true)
+      onCommand: event => open(owner(event), "both", true)
     });
     for (const target of ["main/library/item", "main/menubar/tools"]) {
       const menuID = "ollama-local-ai-" + target.replaceAll("/", "-");
@@ -71,7 +74,7 @@ var OllamaLocalMain = (() => {
       if (!registered) throw new Error("Ollama Local AI 菜单注册失败");
       menuIDs.push(registered);
     }
-    Zotero.OllamaLocalAI = { openSettings: () => open(null, "all", true) };
+    Zotero.OllamaLocalAI = { openSettings: () => open(null, "both", true) };
     await Zotero.PreferencePanes.register({
       pluginID: info.id,
       id: "ollama-local-ai-preferences",
@@ -86,6 +89,7 @@ var OllamaLocalMain = (() => {
       try { dialog.close(); } catch (_) {}
     }
     dialogs.clear();
+    engine.dispose();
     for (const id of menuIDs.splice(0)) Zotero.MenuManager.unregisterMenu(id);
     for (const win of windows) removeWindow(win);
     windows.clear();

@@ -290,3 +290,145 @@ test('AbortSignal cancels native request and surfaces an AbortError',async()=>{
   await assert.rejects(pending,error=>error.name==='AbortError');
   assert.equal(wasCancelled,true);
 });
+
+function progressXHR(status=200) {
+  const listeners=new Set();
+  return {
+    status,responseText:'',listeners,
+    addEventListener(type,fn){assert.equal(type,'progress');listeners.add(fn);},
+    removeEventListener(type,fn){assert.equal(type,'progress');listeners.delete(fn);},
+    progress(text){this.responseText=text;for(const fn of [...listeners])fn();}
+  };
+}
+
+test('streaming emits incremental UTF-8 text once and flushes the final unread suffix',async()=>{
+  const {api,Zotero}=fixture();
+  const xhr=progressXHR();
+  const text='{"message":{"content":"本地😀"}}\n{"done":true}\n';
+  const chunks=[];
+  let finalResolve;
+  Zotero.HTTP.request=(method,url,options)=>new Promise(resolve=>{
+    assert.equal(options.followRedirects,false);
+    assert.equal(options.anon,true);
+    assert.equal(options.logBodyLength,0);
+    assert.equal(options.headers.Accept,'application/x-ndjson');
+    options.requestObserver(xhr);
+    options.cancellerReceiver(()=>assert.fail('should not cancel a successful stream'));
+    xhr.progress(text.slice(0,10));
+    xhr.progress(text.slice(0,26));
+    xhr.progress(text.slice(0,26)); // repeated events must not repeat output
+    finalResolve=()=>{xhr.responseText=text;resolve(xhr);};
+  });
+  const pending=api.transport({url:'http://127.0.0.1:11434/api/chat',method:'POST',stream:true,onChunk:chunk=>chunks.push(chunk)});
+  assert.equal(chunks.length,2,'progress must arrive before final load');
+  finalResolve();
+  assert.equal(await pending,text);
+  assert.equal(chunks.join(''),text);
+  assert.equal(chunks.length,3);
+  assert.equal(xhr.listeners.size,0,'settled requests release their native progress listener');
+});
+
+test('streaming without native progress still returns and emits the complete body',async()=>{
+  const {api,Zotero}=fixture();
+  const text='{"message":{"content":"A"},"done":true}\n';
+  const chunks=[];
+  Zotero.HTTP.request=async()=>({status:200,responseText:text});
+  assert.equal(await api.transport({url:'http://127.0.0.1:11434/api/chat',stream:true,onChunk:chunk=>chunks.push(chunk)}),text);
+  assert.deepEqual(chunks,[text]);
+});
+
+test('a stream parser exception cancels native IO and is returned to the caller',async()=>{
+  const {api,Zotero}=fixture();
+  const xhr=progressXHR();
+  let cancelled=false;
+  const parserError=new Error('Malformed NDJSON frame');
+  Zotero.HTTP.request=(method,url,options)=>new Promise((resolve,reject)=>{
+    options.requestObserver(xhr);
+    options.cancellerReceiver(()=>{cancelled=true;reject(new Error('native cancelled'));});
+    xhr.progress('{broken frame}\n');
+  });
+  await assert.rejects(api.transport({url:'http://127.0.0.1:11434/api/chat',stream:true,onChunk:()=>{throw parserError;}}),error=>error===parserError);
+  assert.equal(cancelled,true);
+  assert.equal(xhr.listeners.size,0);
+});
+
+test('streaming cancellation removes progress listeners and never emits after abort',async()=>{
+  const {api,Zotero}=fixture();
+  const xhr=progressXHR();
+  const controller=new AbortController();
+  const chunks=[];
+  Zotero.HTTP.request=(method,url,options)=>new Promise((resolve,reject)=>{
+    options.requestObserver(xhr);
+    options.cancellerReceiver(()=>reject(new Error('native aborted')));
+    xhr.progress('initial');
+  });
+  const pending=api.transport({url:'http://127.0.0.1:11434/api/chat',stream:true,signal:controller.signal,onChunk:chunk=>chunks.push(chunk)});
+  controller.abort();
+  xhr.progress('initial must not be emitted');
+  await assert.rejects(pending,error=>error.name==='AbortError');
+  assert.deepEqual(chunks,['initial']);
+  assert.equal(xhr.listeners.size,0);
+});
+
+test('HTTP failure and redirect bodies never become streamed model output',async()=>{
+  const {api,Zotero}=fixture();
+  const chunks=[];
+  let status=500;
+  Zotero.HTTP.request=async(method,url,options)=>{
+    const xhr=progressXHR(status);
+    options.requestObserver(xhr);
+    xhr.progress('{"error":"model not available"}');
+    return xhr;
+  };
+  await assert.rejects(api.transport({url:'http://127.0.0.1:11434/api/chat',stream:true,onChunk:chunk=>chunks.push(chunk)}),/HTTP 500.*model not available/);
+  status=302;
+  await assert.rejects(api.transport({url:'http://127.0.0.1:11434/api/chat',stream:true,onChunk:chunk=>chunks.push(chunk)}),/重定向/);
+  assert.deepEqual(chunks,[]);
+});
+
+test('oversized streams cancel before exposing the large body',async()=>{
+  const {api,Zotero}=fixture();
+  let cancelled=false;
+  Zotero.HTTP.request=(method,url,options)=>new Promise((resolve,reject)=>{
+    const xhr=progressXHR();
+    options.requestObserver(xhr);
+    options.cancellerReceiver(()=>{cancelled=true;reject(new Error('native cancelled'));});
+    xhr.progress('x'.repeat(4*1024*1024+1));
+  });
+  await assert.rejects(api.transport({url:'http://127.0.0.1:11434/api/chat',stream:true,onChunk:()=>assert.fail('oversized body must not be exposed')}),/响应过大/);
+  assert.equal(cancelled,true);
+});
+
+test('runtime diagnostics identify GPU, CPU, mixed residency and unloaded selected models',async()=>{
+  const {api,Zotero}=fixture();
+  Zotero.HTTP.request=async(method,url,options)=>{
+    assert.equal(method,'GET');
+    assert.equal(url,'http://127.0.0.1:11434/api/ps');
+    assert.equal(options.timeout,10000);
+    return {status:200,responseText:JSON.stringify({models:[
+      {name:'gpu:4b',size:100,size_vram:100,context_length:8192},
+      {name:'cpu:4b',size:100,size_vram:0},
+      {name:'mixed:4b',size:100,size_vram:60,expires_at:'2026-11-13T00:00:00Z'},
+      {model:'unknown:4b'},
+      {name:'invalid:4b',size:-20,size_vram:'100'},
+      null
+    ]})};
+  };
+  const data=await api.getRuntimeInfo({model:'mixed:4b'});
+  assert.deepEqual(data.models.map(model=>model.processor),['gpu','cpu','mixed','unknown','unknown']);
+  assert.equal(data.selectedModel.name,'mixed:4b');
+  assert.equal(data.selectedModel.gpuFraction,0.6);
+  assert.equal(data.selectedModel.cpuBytes,40);
+  assert.equal(data.models[0].contextTokens,8192);
+  assert.equal(data.isLoaded,true);
+  const unloaded=await api.getRuntimeInfo({model:'other:4b'});
+  assert.equal(unloaded.isLoaded,false);
+  assert.equal(unloaded.selectedModel,null);
+});
+
+test('malformed runtime diagnostics and non-loopback addresses are rejected',async()=>{
+  const {api,Zotero}=fixture();
+  Zotero.HTTP.request=async()=>({status:200,responseText:'{"models":null}'});
+  await assert.rejects(api.getRuntimeInfo({model:'local'}),/运行状态响应格式/);
+  await assert.rejects(api.getRuntimeInfo({endpoint:'https://remote.example',model:'local'}),/仅允许本机/);
+});

@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
+const {webcrypto}=require('node:crypto');
 
 test('bootstrap loads scoped modules, registers native menus and preferences, opens and cleans up dialog', async () => {
   const root = path.resolve(__dirname, '../addon');
@@ -10,6 +11,7 @@ test('bootstrap loads scoped modules, registers native menus and preferences, op
   let destroyed = false;
   const item = {id:42,parentID:null,deleted:false,isRegularItem:()=>true,getField:()=> '示例文献'};
   const win = {
+    setTimeout, clearTimeout,
     MozXULElement: {insertFTLIfNeeded:file=>inserted.push(file)},
     document: {querySelectorAll:()=>[]},
     ZoteroPane: {getSelectedItems:()=>[item]},
@@ -36,7 +38,7 @@ test('bootstrap loads scoped modules, registers native menus and preferences, op
     classes:{'@mozilla.org/addons/addon-manager-startup;1':{getService:()=>({registerChrome:()=>({destruct:()=>{destroyed=true;}})})}},
     interfaces:{amIAddonManagerStartup:{}},results:{}
   };
-  const scope = vm.createContext({Zotero,Services,Components,ChromeUtils:{},URL,TextEncoder,APP_SHUTDOWN:8});
+  const scope = vm.createContext({Zotero,Services,Components,ChromeUtils:{},URL,TextEncoder,crypto:webcrypto,APP_SHUTDOWN:8});
   vm.runInContext(fs.readFileSync(path.join(root,'bootstrap.js'),'utf8'),scope);
   await scope.startup({id:'ollama-local-ai@local.tools',version:'0.1.0',rootURI:'test:///'+root+'/'});
   assert.equal(registered.length,2);
@@ -52,6 +54,8 @@ test('bootstrap loads scoped modules, registers native menus and preferences, op
   assert.equal(dialogs[0].bridge.items[0].id,42);
   assert.equal(typeof dialogs[0].bridge.adapter.getItem,'function');
   assert.equal(typeof dialogs[0].bridge.core.generate,'function');
+  assert.equal(typeof dialogs[0].bridge.engine.generate,'function');
+  assert.equal(typeof dialogs[0].bridge.engine.login,'function');
   scope.shutdown({},4);
   assert.equal(dialogs[0].closed,true);
   assert.equal(removed.length,2);

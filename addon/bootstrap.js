@@ -15,10 +15,10 @@ async function startup({ id, version, rootURI }) {
   pluginScope = {
     Zotero, Services, ChromeUtils, Components,
     Cc: Components.classes, Ci: Components.interfaces, Cr: Components.results,
-    URL, TextEncoder, rootURI
+    URL, TextEncoder, crypto, rootURI
   };
   pluginScope.globalThis = pluginScope;
-  for (const file of ["core.js", "zotero-adapter.js", "main.js"]) {
+  for (const file of ["core.js", "zotero-adapter.js", "chatgpt.js", "engine.js", "main.js"]) {
     Services.scriptloader.loadSubScript(rootURI + "content/" + file, pluginScope, "UTF-8");
   }
   await pluginScope.OllamaLocalMain.start({ id, version, rootURI });

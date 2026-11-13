@@ -163,7 +163,7 @@
     async function transport(request) {
       const parsed = new URL(request.url);
       const origin = core.validateEndpoint(parsed.origin);
-      if (!["/api/tags", "/api/show", "/api/chat"].includes(parsed.pathname) ||
+      if (!["/api/tags", "/api/show", "/api/chat", "/api/ps"].includes(parsed.pathname) ||
           parsed.search || parsed.hash || parsed.username || parsed.password ||
           request.url !== origin + parsed.pathname) {
         throw new Error("仅允许访问本地 Ollama 的模型查询和聊天接口。");
@@ -175,14 +175,44 @@
         return error;
       };
       if (signal && signal.aborted) throw abortError();
+      const streaming = request.stream === true || typeof request.onChunk === "function";
+      const limit = 4 * 1024 * 1024;
       let cancel;
+      let observerXHR;
+      let progressListener;
+      let receivedCharacters = 0;
+      let callbackError;
+      // XHR incrementally decodes UTF-8 responseText for us. Slice by the
+      // previous JS-string length without interpreting NDJSON in this layer.
+      const flushProgress = xhr => {
+        if (!streaming || callbackError || (signal && signal.aborted)) return;
+        if (!xhr || xhr.status < 200 || xhr.status >= 300) return;
+        let content;
+        try { content = String(xhr.responseText || ""); }
+        catch (_) { return; /* Headers may arrive before readable text. */ }
+        if (content.length > limit) {
+          callbackError = new Error("Ollama 响应过大，请减少模型输出长度。");
+          if (cancel) cancel();
+          return;
+        }
+        if (content.length <= receivedCharacters) return;
+        const delta = content.slice(receivedCharacters);
+        receivedCharacters = content.length;
+        if (typeof request.onChunk === "function") {
+          try { request.onChunk(delta); }
+          catch (error) {
+            callbackError = error instanceof Error ? error : new Error(String(error));
+            if (cancel) cancel();
+          }
+        }
+      };
       const abort = () => { if (cancel) cancel(); };
       if (signal) signal.addEventListener("abort", abort, { once: true });
       let response;
       try {
         response = await Zotero.HTTP.request(request.method || "GET", request.url, {
           body: request.body === undefined ? undefined : JSON.stringify(request.body),
-          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          headers: { Accept: streaming ? "application/x-ndjson" : "application/json", "Content-Type": "application/json" },
           responseType: "text",
           timeout: Math.max(1000, Math.min(Number(request.timeoutMs) || 180000, 1800000)),
           // Native Zotero 10 transport blocks redirects before contacting the target.
@@ -193,6 +223,12 @@
           logBodyLength: 0,
           successCodes: false,
           errorDelayMax: 0,
+          requestObserver(xhr) {
+            if (!streaming) return;
+            observerXHR = xhr;
+            progressListener = () => flushProgress(xhr);
+            xhr.addEventListener("progress", progressListener);
+          },
           cancellerReceiver(fn) {
             cancel = fn;
             if (signal && signal.aborted) cancel();
@@ -201,6 +237,7 @@
       }
       catch (error) {
         if (signal && signal.aborted) throw abortError();
+        if (callbackError) throw callbackError;
         if (error && (error.name === "TimeoutException" || /timeout|timed out/i.test(String(error)))) {
           throw new Error("本地模型请求超时。可在设置中延长超时，或改用较小的模型。");
         }
@@ -208,8 +245,10 @@
       }
       finally {
         if (signal) signal.removeEventListener("abort", abort);
+        if (observerXHR && progressListener) observerXHR.removeEventListener("progress", progressListener);
       }
       if (signal && signal.aborted) throw abortError();
+      if (callbackError) throw callbackError;
       if (response.status >= 300 && response.status < 400) {
         throw new Error("已阻止 Ollama HTTP 重定向，请填写本地服务的直接地址。");
       }
@@ -219,12 +258,50 @@
         throw new Error("Ollama 返回 HTTP " + response.status + (detail ? "：" + detail : "。请检查服务和模型。"));
       }
       const text = String(response.responseText || "");
-      if (text.length > 4 * 1024 * 1024) throw new Error("Ollama 响应过大，请减少模型输出长度。");
+      if (text.length > limit) throw new Error("Ollama 响应过大，请减少模型输出长度。");
+      if (streaming) {
+        // The final load can contain bytes for which Gecko emitted no progress
+        // event. Flush that suffix once, then return the complete raw body.
+        flushProgress(response);
+        if (callbackError) throw callbackError;
+        return text;
+      }
       let data;
       try { data = JSON.parse(text); }
       catch (_) { throw new Error("Ollama 响应不是有效 JSON，请确认地址指向 Ollama 原生 API。"); }
       if (data && data.error) throw new Error("Ollama：" + String(data.error).slice(0, 300));
       return data;
+    }
+
+    async function getRuntimeInfo(rawSettings, signal) {
+      const settings = core.normalizeSettings(rawSettings);
+      const data = await transport({
+        url: settings.endpoint + "/api/ps", method: "GET",
+        timeoutMs: Math.min(settings.timeoutSeconds * 1000, 10000), signal
+      });
+      if (!data || !Array.isArray(data.models)) throw new Error("Ollama 的运行状态响应格式错误。");
+      const nonnegative = value => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+      const models = data.models.filter(model => model && typeof (model.name || model.model) === "string")
+        .map(model => {
+          const sizeBytes = nonnegative(model.size);
+          const vramBytes = nonnegative(model.size_vram);
+          const gpuFraction = sizeBytes > 0 && vramBytes !== null ? Math.min(1, vramBytes / sizeBytes) : null;
+          return {
+            name: model.name || model.model,
+            sizeBytes,
+            vramBytes,
+            cpuBytes: sizeBytes !== null && vramBytes !== null ? Math.max(0, sizeBytes - vramBytes) : null,
+            gpuFraction,
+            processor: gpuFraction === null ? "unknown" : gpuFraction === 0 ? "cpu" : gpuFraction === 1 ? "gpu" : "mixed",
+            contextTokens: nonnegative(model.context_length),
+            expiresAt: typeof model.expires_at === "string" ? model.expires_at : null
+          };
+        });
+      return {
+        models,
+        selectedModel: models.find(model => model.name === settings.model) || null,
+        isLoaded: models.some(model => model.name === settings.model)
+      };
     }
 
     async function saveResult(itemID, result, context, rawSettings, mode, options = {}) {
@@ -305,7 +382,7 @@
       return { addedTags, noteID, overviewNoteID, styleRemarkUpdated };
     }
 
-    return { loadSettings, saveSettings, getSelectedItems, getItem, collectContext, transport, saveResult, readStyleRemark, updateStyleRemark };
+    return { loadSettings, saveSettings, getSelectedItems, getItem, collectContext, transport, getRuntimeInfo, saveResult, readStyleRemark, updateStyleRemark };
   }
 
   return { create, PREF, readStyleRemark, updateStyleRemark };
