@@ -31,7 +31,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 12
     env:
-      NATIVE_SMOKE_DIR: ${{ runner.temp }}/zotero-local-ai-native-smoke
+      # runner.* is unavailable in job-level env expressions. This Linux-only
+      # job runs on a fresh hosted runner and keeps all test data in /tmp.
+      NATIVE_SMOKE_DIR: /tmp/zotero-local-ai-native-smoke
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
