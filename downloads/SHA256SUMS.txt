@@ -2,5 +2,5 @@
 cb5da438a68cbea65df26d0f73ee3d2ec1f059e91e435cddfd6cd0f2a78961d0  ollama-local-ai-0.1.0.xpi
 088763fad0ceae3d4d921c30e19cf503af1bcfb2e3a9449db040c47a2bcb64e8  ollama-local-ai-0.2.0-source.zip
 e3ca045c6cf296e4a5d9e730a55d5e874641853555c87080982b6b87c1ba9446  ollama-local-ai-0.2.0.xpi
-5022ab6c92ee3e4af3489324a0a908da6ca2353b8dae51a09417b3572f20de50  ollama-local-ai-0.3.0-source.zip
+db753cc37ed164e2439bc2cce9e94c99f42934cfe16234ecf0df1e2ce89bf112  ollama-local-ai-0.3.0-source.zip
 8e78295414f79812389978bc5ceee0ec736dae431475377d3c8a9a8c78844a46  ollama-local-ai-0.3.0.xpi

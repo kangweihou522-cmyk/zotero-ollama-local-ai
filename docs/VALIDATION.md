@@ -18,7 +18,7 @@
 
 ## 真实宿主验证
 
-**v0.3.0 已通过 Linux 真实 Zotero 10.0.8 测试**：[CI 记录](https://github.com/kangweihou522-cmyk/zotero-ollama-local-ai/actions/runs/43466210779)，候选提交 `d4a49db37461242aed67a6b97c70e323d9bbd77a`。发布前另修正了云端模式的顶部材料去向提示，并验证引擎切换时正确显示。
+**v0.3.0 最终 XPI 已通过 Linux 真实 Zotero 10.0.8 测试**：[CI 记录](https://github.com/kangweihou522-cmyk/zotero-ollama-local-ai/actions/runs/43536588409)，候选提交 `26d9fb743e59e699d1d1434f49df2e4c0a31fc45`。XPI SHA256 为 `8e78295414f79812389978bc5ceee0ec736dae431475377d3c8a9a8c78844a46`，与发布包一致。云端模式的顶部材料去向提示也已修正，并验证切回本地时恢复。
 
 - 通过实际 AddonManager 安装 XPI，启动插件、注册菜单与打开原生窗口。
 - 通过原生 HTTP 分片回调接收 Ollama 流、判断完整响应、读取运行信息并命中缓存。
