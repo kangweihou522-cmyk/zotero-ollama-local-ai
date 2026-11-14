@@ -6,6 +6,8 @@ The driver is a separate test-only addon. It is not part of the production XPI. 
 
 Run `python3 scripts/build.py`, then `bash tests/native/run.sh`. The runner downloads Zotero **10.0.8** from the official download endpoint, requires Linux `xvfb-run`, `timeout`, Node.js, Python 3 and GTK runtime libraries, and keeps logs under `$NATIVE_SMOKE_DIR` (default: a temporary-directory location). Set `ZOTERO_BIN` to an existing Linux Zotero executable to skip the download.
 
-The mock speaks Ollama's local API but loads no real model. A passing run establishes native host/protocol/storage integration, not model quality, OCR, or Windows/macOS compatibility. Until the GitHub Actions job has actually completed successfully, this is an implemented smoke test rather than evidence of a passing native installation.
+The mock speaks Ollama's local API, including streamed NDJSON and model residency, but loads no real model. The native driver also exercises an actual loopback OAuth callback, WebCrypto-signed synthetic identity tokens, native LoginManager persistence, refresh rotation, generated SSE, and logout. OAuth/token/model HTTP responses are injected fixtures, not a real ChatGPT account.
+
+A passing run establishes native host/protocol/storage integration, not Plus entitlement, actual model availability or quality, GPU performance, OCR, or Windows/macOS compatibility. The v0.3.0 candidate passed in [run 43466210779](https://github.com/kangweihou522-cmyk/zotero-ollama-local-ai/actions/runs/43466210779); see [validation scope](../../docs/VALIDATION.md).
 
 The separate driver's startup intentionally schedules its async test without returning the Promise: Zotero waits for addon startup before announcing that its UI is ready.

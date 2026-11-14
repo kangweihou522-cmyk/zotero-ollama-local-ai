@@ -5,8 +5,8 @@
   <h:link rel="stylesheet" href="dialog.css"/>
   <h:main id="app">
     <h:header class="header">
-      <h:div class="brand"><h:img src="icon.svg" alt=""/><h:div><h:h1>Ollama Local AI</h:h1><h:p>让文献整理，留在本机。</h:p></h:div></h:div>
-      <h:span class="local-badge">本地推理 · 预览后保存</h:span>
+      <h:div class="brand"><h:img src="icon.svg" alt=""/><h:div><h:h1>Ollama Local AI</h:h1><h:p id="provider-subtitle">整理文献，预览后保存。</h:p></h:div></h:div>
+      <h:span id="provider-badge" class="local-badge">正在读取引擎设置</h:span>
     </h:header>
     <h:nav class="tabs" aria-label="工作区">
       <h:button id="tab-generate" class="tab active" type="button">文献整理</h:button>
@@ -27,7 +27,7 @@
         <h:aside class="queue">
           <h:div class="queue-heading"><h:strong>选中文献</h:strong><h:span id="item-count" class="muted"/></h:div>
           <h:select id="items" size="12" aria-label="选中文献列表"/>
-          <h:p class="hint">逐篇生成，降低显存占用。可编辑结果，再逐篇或批量保存。</h:p>
+          <h:p class="hint">逐篇生成，可随时停止。可编辑结果，再逐篇或批量保存。</h:p>
         </h:aside>
         <h:div class="editor">
           <h:h2 id="item-title">请先在文献库选中文献</h:h2>

@@ -34,6 +34,8 @@
   }
   function providerViews() {
     const cloud=activeProvider==="chatgpt";
+    $("provider-subtitle").textContent=cloud?"选定材料将发送到 OpenAI。":"让文献整理，留在本机。";
+    $("provider-badge").textContent=cloud?"ChatGPT 云端 · 预览后保存":"本地推理 · 预览后保存";
     $("ollama-settings").hidden=cloud;$("chatgpt-settings").hidden=!cloud;
     $("model-label").textContent=cloud?"账户可用模型":"已安装模型";
     $("connection-status").textContent=cloud?"先在官方页面登录授权，再检测可用模型。":"请确认 Ollama 运行，再检测本地模型。";

@@ -258,7 +258,10 @@ test('identical evidence uses the memory cache and force-refresh bypasses it',as
 
 test('subscription UI requires explicit selection and mocked official login before cloud generation',async t=>{
   const {page,errors}=await setup(t,'both');
+  assert.match(await page.locator('#provider-badge').textContent(),/本地推理/);
   await page.click('#tab-settings');await page.selectOption('#provider','chatgpt');
+  assert.match(await page.locator('#provider-badge').textContent(),/ChatGPT 云端/);
+  assert.match(await page.locator('#provider-subtitle').textContent(),/发送到 OpenAI/);
   assert.equal(await page.locator('#chatgpt-settings').isVisible(),true);
   assert.match(await page.locator('.cloud-disclosure').textContent(),/发送到 OpenAI/);
   assert.match(await page.locator('#chatgpt-status').textContent(),/尚未授权/);
@@ -286,6 +289,8 @@ test('subscription quota failures preserve the selected engine and never silentl
   assert.equal(await page.evaluate(()=>window.TEST.saves.length),0);
   await page.click('#tab-settings');await page.selectOption('#provider','ollama');
   assert.equal(await page.inputValue('#model'),'qwen3:4b');
+  assert.match(await page.locator('#provider-badge').textContent(),/本地推理/);
+  assert.match(await page.locator('#provider-subtitle').textContent(),/留在本机/);
   assert.deepEqual(errors,[]);
 });
 
